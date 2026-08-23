@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.1
+// @version      4.0.2
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -39,7 +39,6 @@
         'yt-formatted-string#content-text'
     ].join(',');
 
-    // YouTubeはDOMが頻繁に変わるため、新旧の動画カードを広めに拾います。
     const VIDEO_CARD_SELECTOR = [
         'ytd-rich-item-renderer',
         'ytd-video-renderer',
@@ -475,10 +474,8 @@
                 );
 
             if (
-                parsed.hostname !==
-                    'www.youtube.com' &&
-                parsed.hostname !==
-                    'youtube.com'
+                parsed.hostname !== 'www.youtube.com' &&
+                parsed.hostname !== 'youtube.com'
             ) {
                 return '';
             }
@@ -489,10 +486,6 @@
                     ''
                 );
 
-            /*
-             * 動画URLなどを
-             * 投稿者URLとして誤認しない
-             */
             if (
                 !path.startsWith('/@') &&
                 !path.startsWith('/channel/') &&
@@ -1044,10 +1037,6 @@
                 .forEach(
                     card => {
 
-                        /*
-                         * rich-item内のlockupを
-                         * 二重処理しない
-                         */
                         if (
                             card.matches(
                                 'yt-lockup-view-model'
@@ -1075,9 +1064,6 @@
         card
     ) {
 
-        /*
-         * Shorts専用タイトル
-         */
         const shortsTitle =
             card.querySelector(
                 '.shortsLockupViewModelHostMetadataTitle'
@@ -1246,9 +1232,6 @@
         card
     ) {
 
-        /*
-         * 広告枠は触らない
-         */
         if (
             card.matches(
                 'ytd-ad-slot-renderer'
@@ -1385,9 +1368,6 @@
             VIDEO_USER_BUTTON_CLASS
         );
 
-        /*
-         * なるべくチャンネル名付近に置く
-         */
         const target =
             card.querySelector(
                 'ytd-channel-name'
@@ -1517,9 +1497,33 @@
 
     function isFullscreen() {
 
+        const player =
+            document.querySelector(
+                '.html5-video-player'
+            );
+
+        const watchPage =
+            document.querySelector(
+                'ytd-watch-flexy'
+            );
+
         return Boolean(
             document.fullscreenElement ||
-            document.webkitFullscreenElement
+            document.webkitFullscreenElement ||
+
+            (
+                player &&
+                player.classList.contains(
+                    'ytp-fullscreen'
+                )
+            ) ||
+
+            (
+                watchPage &&
+                watchPage.hasAttribute(
+                    'fullscreen'
+                )
+            )
         );
     }
 
@@ -1534,10 +1538,22 @@
             return;
         }
 
-        controls.style.display =
-            isFullscreen()
-                ? 'none'
-                : 'flex';
+        if (isFullscreen()) {
+
+            controls.style.setProperty(
+                'display',
+                'none',
+                'important'
+            );
+
+        } else {
+
+            controls.style.setProperty(
+                'display',
+                'flex',
+                'important'
+            );
+        }
     }
 
     /* =========================================================
@@ -1973,10 +1989,7 @@
             }
         );
 
-        /*
-         * YouTube内で
-         * 別動画・別ページへ移動したとき
-         */
+        /* YouTube内で別動画・別ページへ移動したとき */
         document.addEventListener(
             'yt-navigate-finish',
             () => {
@@ -2002,26 +2015,28 @@
             }
         );
 
-        /*
-         * 全画面になった瞬間に
-         * 右下NGメニューを消す
-         */
+        /* ブラウザ標準の全画面イベント */
         document.addEventListener(
             'fullscreenchange',
             updateControlsVisibility
         );
 
-        /*
-         * Safari系などの保険
-         */
+        /* Safari系などの保険 */
         document.addEventListener(
             'webkitfullscreenchange',
             updateControlsVisibility
         );
 
         /*
-         * 遅延読み込み対策
+         * YouTube独自の全画面状態も定期確認
+         * fullscreenchangeだけでは拾えない場合の保険
          */
+        setInterval(
+            updateControlsVisibility,
+            300
+        );
+
+        /* 遅延読み込み対策 */
         setTimeout(
             fullScan,
             1000
