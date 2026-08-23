@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YouTube コメントNGフィルター（ワード＋投稿者）
-// @namespace    youtube-comment-ng-all-in-one
-// @version      3.0.0
-// @description  NGワード・NG投稿者に一致するYouTubeコメントを自動で非表示にします
+// @name         YouTube NGフィルター（コメント＋動画＋Shorts）
+// @namespace    youtube-ng-all-in-one
+// @version      4.0.1
+// @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        none
@@ -13,26 +13,19 @@
 
     /* =========================================================
        保存設定
-
-       旧バージョンと同じキーを使用するため、
-       登録済みのNGワード・NGユーザーを引き継ぎます。
+       既存v3のキーをそのまま使うので登録内容を引き継ぎます
     ========================================================= */
 
-    const WORD_STORAGE_KEY =
-        'youtube_comment_ng_words';
+    const COMMENT_WORD_STORAGE_KEY = 'youtube_comment_ng_words';
+    const USER_STORAGE_KEY = 'youtube_comment_ng_users_v1';
+    const VIDEO_TITLE_WORD_STORAGE_KEY = 'youtube_video_ng_title_words_v1';
 
-    const USER_STORAGE_KEY =
-        'youtube_comment_ng_users_v1';
-
-    const USER_NG_BUTTON_CLASS =
-        'youtube-user-ng-button';
-
-    const CONTROL_ID =
-        'youtube-ng-unified-controls';
-
+    const COMMENT_USER_BUTTON_CLASS = 'youtube-user-ng-button';
+    const VIDEO_USER_BUTTON_CLASS = 'youtube-video-user-ng-button';
+    const CONTROL_ID = 'youtube-ng-unified-controls';
 
     /* =========================================================
-       コメント関連セレクタ
+       セレクタ
     ========================================================= */
 
     const COMMENT_SELECTOR = [
@@ -40,19 +33,57 @@
         'ytd-comment-renderer'
     ].join(',');
 
-    const CONTENT_SELECTOR = [
+    const COMMENT_CONTENT_SELECTOR = [
         '#content-text',
         'yt-attributed-string#content-text',
         'yt-formatted-string#content-text'
     ].join(',');
 
+    // YouTubeはDOMが頻繁に変わるため、新旧の動画カードを広めに拾います。
+    const VIDEO_CARD_SELECTOR = [
+        'ytd-rich-item-renderer',
+        'ytd-video-renderer',
+        'ytd-grid-video-renderer',
+        'ytd-compact-video-renderer',
+        'yt-lockup-view-model',
+        'ytm-shorts-lockup-view-model',
+        'ytm-shorts-lockup-view-model-v2'
+    ].join(',');
+
+    const VIDEO_TITLE_SELECTOR = [
+        '#video-title',
+        '#video-title-link',
+        'a#video-title',
+        'h3',
+        '.shortsLockupViewModelHostMetadataTitle',
+        '.yt-lockup-metadata-view-model__title',
+        '[class*="metadata"] [class*="title"]'
+    ].join(',');
+
+    const CHANNEL_LINK_SELECTOR = [
+        'ytd-channel-name a[href]',
+        '#channel-name a[href]',
+        '#channel-info a[href]',
+        '#metadata a[href^="/@"]',
+        '#metadata a[href^="/channel/"]',
+        '#metadata a[href^="/user/"]',
+        '#metadata a[href^="/c/"]',
+        '.yt-content-metadata-view-model__metadata-row a[href]',
+        'a.yt-simple-endpoint[href^="/@"]',
+        'a.yt-simple-endpoint[href^="/channel/"]',
+        'a.yt-simple-endpoint[href^="/user/"]',
+        'a.yt-simple-endpoint[href^="/c/"]',
+        'a[href^="/@"]',
+        'a[href^="/channel/"]',
+        'a[href^="/user/"]',
+        'a[href^="/c/"]'
+    ].join(',');
 
     /* =========================================================
-       共通処理
+       共通
     ========================================================= */
 
     function normalize(text) {
-
         return String(text || '')
             .normalize('NFKC')
             .toLowerCase()
@@ -61,22 +92,17 @@
             .trim();
     }
 
-
     function uniqueByNormalizedValue(list) {
-
         const result = [];
         const seen = new Set();
 
         for (const value of list) {
+            const normalized = normalize(value);
 
-            const normalized =
-                normalize(value);
-
-            if (!normalized) {
-                continue;
-            }
-
-            if (seen.has(normalized)) {
+            if (
+                !normalized ||
+                seen.has(normalized)
+            ) {
                 continue;
             }
 
@@ -90,20 +116,11 @@
         return result;
     }
 
-
-    /* =========================================================
-       NGワード保存
-    ========================================================= */
-
-    function loadNGWords() {
-
+    function loadArray(key) {
         try {
-
             const saved =
                 JSON.parse(
-                    localStorage.getItem(
-                        WORD_STORAGE_KEY
-                    ) || '[]'
+                    localStorage.getItem(key) || '[]'
                 );
 
             return Array.isArray(saved)
@@ -113,7 +130,8 @@
         } catch (error) {
 
             console.error(
-                '[YouTube NG] NGワード読み込み失敗',
+                '[YouTube NG] 読み込み失敗:',
+                key,
                 error
             );
 
@@ -121,46 +139,31 @@
         }
     }
 
-
-    function saveNGWords(words) {
-
+    function saveArray(key, values) {
         try {
 
-            const cleaned =
-                uniqueByNormalizedValue(
-                    words
-                );
-
             localStorage.setItem(
-                WORD_STORAGE_KEY,
-                JSON.stringify(cleaned)
+                key,
+                JSON.stringify(values)
             );
 
         } catch (error) {
 
             console.error(
-                '[YouTube NG] NGワード保存失敗',
+                '[YouTube NG] 保存失敗:',
+                key,
                 error
             );
         }
     }
 
-
-    /* =========================================================
-       NGワード判定
-    ========================================================= */
-
-    function getMatchedNGWord(text) {
-
+    function getMatchedWord(text, words) {
         const normalizedText =
             normalize(text);
 
         if (!normalizedText) {
             return '';
         }
-
-        const words =
-            loadNGWords();
 
         for (const word of words) {
 
@@ -180,16 +183,28 @@
         return '';
     }
 
-
     /* =========================================================
-       NGワード追加
+       コメントNGワード
     ========================================================= */
 
-    function addNGWord() {
+    function loadCommentNGWords() {
+        return loadArray(
+            COMMENT_WORD_STORAGE_KEY
+        );
+    }
+
+    function saveCommentNGWords(words) {
+        saveArray(
+            COMMENT_WORD_STORAGE_KEY,
+            uniqueByNormalizedValue(words)
+        );
+    }
+
+    function addCommentNGWord() {
 
         const input =
             prompt(
-                '非表示にしたいNGワードを入力してください。\n\n' +
+                'コメントから非表示にしたいNGワードを入力してください。\n\n' +
                 'その言葉を含むコメントが非表示になります。'
             );
 
@@ -210,16 +225,15 @@
         }
 
         const words =
-            loadNGWords();
+            loadCommentNGWords();
 
-        const exists =
+        if (
             words.some(
-                savedWord =>
-                    normalize(savedWord) ===
+                saved =>
+                    normalize(saved) ===
                     normalize(word)
-            );
-
-        if (exists) {
+            )
+        ) {
 
             alert(
                 `「${word}」はすでに登録されています。`
@@ -230,29 +244,115 @@
 
         words.push(word);
 
-        saveNGWords(words);
+        saveCommentNGWords(words);
 
         fullScan();
 
         alert(
-            `「${word}」をNGワードに追加しました。`
+            `「${word}」をコメントNGワードに追加しました。`
         );
     }
 
+    function manageCommentNGWords() {
+
+        manageWordList({
+            title: 'コメントNGワード',
+            words: loadCommentNGWords(),
+            save: saveCommentNGWords
+        });
+    }
 
     /* =========================================================
-       NGワード管理
+       動画タイトルNGワード
     ========================================================= */
 
-    function manageNGWords() {
+    function loadVideoTitleNGWords() {
+
+        return loadArray(
+            VIDEO_TITLE_WORD_STORAGE_KEY
+        );
+    }
+
+    function saveVideoTitleNGWords(words) {
+
+        saveArray(
+            VIDEO_TITLE_WORD_STORAGE_KEY,
+            uniqueByNormalizedValue(words)
+        );
+    }
+
+    function addVideoTitleNGWord() {
+
+        const input =
+            prompt(
+                '動画タイトルから非表示にしたいNGワードを入力してください。\n\n' +
+                'その言葉をタイトルに含む通常動画・Shortsが一覧から消えます。'
+            );
+
+        if (input === null) {
+            return;
+        }
+
+        const word =
+            input.trim();
+
+        if (!word) {
+
+            alert(
+                'NGワードが入力されていません。'
+            );
+
+            return;
+        }
 
         const words =
-            loadNGWords();
+            loadVideoTitleNGWords();
+
+        if (
+            words.some(
+                saved =>
+                    normalize(saved) ===
+                    normalize(word)
+            )
+        ) {
+
+            alert(
+                `「${word}」はすでに登録されています。`
+            );
+
+            return;
+        }
+
+        words.push(word);
+
+        saveVideoTitleNGWords(words);
+
+        fullScan();
+
+        alert(
+            `「${word}」を動画タイトルNGに追加しました。`
+        );
+    }
+
+    function manageVideoTitleNGWords() {
+
+        manageWordList({
+            title: '動画タイトルNG',
+            words: loadVideoTitleNGWords(),
+            save: saveVideoTitleNGWords
+        });
+    }
+
+    function manageWordList({
+        title,
+        words,
+        save
+    }) {
 
         if (words.length === 0) {
 
             alert(
-                '追加登録されたNGワードはありません。'
+                `${title}は登録されていません。`
             );
 
             return;
@@ -268,7 +368,7 @@
 
         const answer =
             prompt(
-                `現在のNGワード一覧：\n\n${list}\n\n` +
+                `現在の${title}一覧：\n\n${list}\n\n` +
                 '削除したいワードの番号を入力してください。\n' +
                 '全部削除する場合は「all」と入力してください。'
             );
@@ -286,17 +386,20 @@
 
             if (
                 !confirm(
-                    '追加したNGワードをすべて削除しますか？'
+                    `${title}をすべて削除しますか？`
                 )
             ) {
                 return;
             }
 
-            saveNGWords([]);
+            save([]);
+
+            restoreHiddenVideos();
+
+            fullScan();
 
             alert(
-                'NGワードをすべて削除しました。\n\n' +
-                '非表示コメントを戻すにはページを再読み込みしてください。'
+                `${title}をすべて削除しました。`
             );
 
             return;
@@ -326,68 +429,36 @@
             1
         );
 
-        saveNGWords(words);
+        save(words);
+
+        restoreHiddenVideos();
+
+        fullScan();
 
         alert(
-            `「${removed}」をNGワードから削除しました。\n\n` +
-            'コメントを戻すにはページを再読み込みしてください。'
+            `「${removed}」を${title}から削除しました。`
         );
     }
 
-
     /* =========================================================
-       NGユーザー保存
+       NGユーザー
+       v3と同じ保存キーを利用
     ========================================================= */
 
     function loadNGUsers() {
 
-        try {
-
-            const saved =
-                JSON.parse(
-                    localStorage.getItem(
-                        USER_STORAGE_KEY
-                    ) || '[]'
-                );
-
-            return Array.isArray(saved)
-                ? saved
-                : [];
-
-        } catch (error) {
-
-            console.error(
-                '[YouTube NG] NGユーザー読み込み失敗',
-                error
-            );
-
-            return [];
-        }
+        return loadArray(
+            USER_STORAGE_KEY
+        );
     }
-
 
     function saveNGUsers(users) {
 
-        try {
-
-            localStorage.setItem(
-                USER_STORAGE_KEY,
-                JSON.stringify(users)
-            );
-
-        } catch (error) {
-
-            console.error(
-                '[YouTube NG] NGユーザー保存失敗',
-                error
-            );
-        }
+        saveArray(
+            USER_STORAGE_KEY,
+            users
+        );
     }
-
-
-    /* =========================================================
-       チャンネルURL処理
-    ========================================================= */
 
     function normalizeChannelUrl(url) {
 
@@ -403,84 +474,43 @@
                     location.origin
                 );
 
-            return (
-                parsed.origin +
+            if (
+                parsed.hostname !==
+                    'www.youtube.com' &&
+                parsed.hostname !==
+                    'youtube.com'
+            ) {
+                return '';
+            }
+
+            const path =
                 parsed.pathname.replace(
                     /\/+$/,
                     ''
-                )
+                );
+
+            /*
+             * 動画URLなどを
+             * 投稿者URLとして誤認しない
+             */
+            if (
+                !path.startsWith('/@') &&
+                !path.startsWith('/channel/') &&
+                !path.startsWith('/user/') &&
+                !path.startsWith('/c/')
+            ) {
+                return '';
+            }
+
+            return (
+                `https://www.youtube.com${path}`
             );
 
         } catch {
 
-            return String(url)
-                .trim()
-                .replace(/[?#].*$/, '')
-                .replace(/\/+$/, '');
-        }
-    }
-
-
-    function getAuthorLink(comment) {
-
-        if (!comment) {
-            return null;
-        }
-
-        return comment.querySelector(
-            [
-                'a#author-text[href]',
-                '#author-text a[href]',
-                'a[href^="/@"]',
-                'a[href^="/channel/"]',
-                'a[href^="/user/"]',
-                'a[href^="/c/"]'
-            ].join(',')
-        );
-    }
-
-
-    function getAuthorName(
-        comment,
-        authorLink
-    ) {
-
-        const node =
-            comment.querySelector(
-                '#author-text span'
-            ) ||
-            comment.querySelector(
-                '#author-text'
-            ) ||
-            authorLink;
-
-        return (
-            node?.textContent?.trim() ||
-            '名前不明'
-        );
-    }
-
-
-    function getChannelUrl(
-        authorLink
-    ) {
-
-        if (!authorLink) {
             return '';
         }
-
-        const url =
-            authorLink.href ||
-            authorLink.getAttribute(
-                'href'
-            ) ||
-            '';
-
-        return normalizeChannelUrl(
-            url
-        );
     }
-
 
     function isBlockedUser(
         channelUrl
@@ -503,101 +533,80 @@
         );
     }
 
-
-    /* =========================================================
-       NGユーザー追加
-    ========================================================= */
-
-    function blockUser(
-        comment
+    function addBlockedUser(
+        name,
+        channelUrl
     ) {
-
-        const authorLink =
-            getAuthorLink(comment);
-
-        const channelUrl =
-            getChannelUrl(
-                authorLink
-            );
-
-        const authorName =
-            getAuthorName(
-                comment,
-                authorLink
-            );
-
-        if (!channelUrl) {
-
-            alert(
-                'このコメント投稿者のチャンネル情報を取得できませんでした。'
-            );
-
-            return;
-        }
-
-        const users =
-            loadNGUsers();
 
         const normalizedUrl =
             normalizeChannelUrl(
                 channelUrl
             );
 
-        const exists =
+        if (!normalizedUrl) {
+
+            alert(
+                'この投稿者のチャンネル情報を取得できませんでした。'
+            );
+
+            return false;
+        }
+
+        const users =
+            loadNGUsers();
+
+        if (
             users.some(
                 user =>
                     normalizeChannelUrl(
                         user.channelUrl
                     ) === normalizedUrl
-            );
-
-        if (exists) {
+            )
+        ) {
 
             alert(
-                `「${authorName}」はすでにNG登録されています。`
+                `「${name}」はすでにNG登録されています。`
             );
 
-            hideComment(
-                comment,
-                'NGユーザー'
-            );
-
-            return;
+            return false;
         }
 
         if (
             !confirm(
-                `「${authorName}」をNGユーザーに登録しますか？\n\n` +
-                'このユーザーのコメントは別の動画でも自動的に非表示になります。'
+                `「${name}」をNGユーザーに登録しますか？\n\n` +
+                'この投稿者のコメント・通常動画・Shortsが自動的に非表示になります。'
             )
         ) {
-            return;
+            return false;
         }
 
         users.push({
+
             name:
-                authorName,
+                name ||
+                '名前不明',
 
             channelUrl:
                 normalizedUrl,
 
             addedAt:
-                new Date().toISOString()
+                new Date()
+                    .toISOString()
         });
 
         saveNGUsers(users);
 
+        restoreHiddenVideos();
+
         fullScan();
 
         alert(
-            `「${authorName}」をNGユーザーに登録しました。`
+            `「${name}」をNGユーザーに登録しました。\n\n` +
+            'この投稿者のコメント・動画・Shortsを非表示にします。'
         );
+
+        return true;
     }
-
-
-    /* =========================================================
-       NGユーザー管理
-    ========================================================= */
 
     function manageNGUsers() {
 
@@ -649,9 +658,13 @@
 
             saveNGUsers([]);
 
+            restoreHiddenComments();
+            restoreHiddenVideos();
+
+            fullScan();
+
             alert(
-                'NGユーザーを全員解除しました。\n\n' +
-                '非表示コメントを戻すにはページを再読み込みしてください。'
+                'NGユーザーを全員解除しました。'
             );
 
             return;
@@ -683,15 +696,18 @@
 
         saveNGUsers(users);
 
+        restoreHiddenComments();
+        restoreHiddenVideos();
+
+        fullScan();
+
         alert(
-            `「${removed.name}」のNGを解除しました。\n\n` +
-            'コメントを戻すにはページを再読み込みしてください。'
+            `「${removed.name}」のNGを解除しました。`
         );
     }
 
-
     /* =========================================================
-       コメント取得
+       コメント処理
     ========================================================= */
 
     function getComments(
@@ -701,130 +717,93 @@
         const result =
             new Set();
 
-        function addElement(
-            element
+        if (
+            root instanceof Element &&
+            root.matches(
+                COMMENT_SELECTOR
+            )
         ) {
 
-            if (
-                !(element instanceof Element)
-            ) {
-                return;
-            }
-
-            if (
-                element.matches(
-                    'ytd-comment-view-model'
-                )
-            ) {
-
-                result.add(element);
-
-                return;
-            }
-
-            if (
-                element.matches(
-                    'ytd-comment-renderer'
-                ) &&
-                !element.closest(
-                    'ytd-comment-view-model'
-                )
-            ) {
-
-                result.add(element);
-            }
+            result.add(root);
         }
 
-
         if (
-            root instanceof Element
+            root.querySelectorAll
         ) {
 
-            addElement(root);
-
             root
                 .querySelectorAll(
-                    'ytd-comment-view-model'
-                )
-                .forEach(
-                    element =>
-                        result.add(element)
-                );
-
-            root
-                .querySelectorAll(
-                    'ytd-comment-renderer'
+                    COMMENT_SELECTOR
                 )
                 .forEach(
                     element => {
 
                         if (
-                            !element.closest(
+                            element.matches(
+                                'ytd-comment-renderer'
+                            ) &&
+                            element.closest(
                                 'ytd-comment-view-model'
                             )
                         ) {
-
-                            result.add(element);
+                            return;
                         }
+
+                        result.add(
+                            element
+                        );
                     }
                 );
         }
-
-
-        if (
-            root instanceof Document
-        ) {
-
-            root
-                .querySelectorAll(
-                    'ytd-comment-view-model'
-                )
-                .forEach(
-                    element =>
-                        result.add(element)
-                );
-
-            root
-                .querySelectorAll(
-                    'ytd-comment-renderer'
-                )
-                .forEach(
-                    element => {
-
-                        if (
-                            !element.closest(
-                                'ytd-comment-view-model'
-                            )
-                        ) {
-
-                            result.add(element);
-                        }
-                    }
-                );
-        }
-
 
         return [
             ...result
         ];
     }
 
+    function getCommentAuthorLink(
+        comment
+    ) {
 
-    /* =========================================================
-       コメント本文取得
-    ========================================================= */
+        return comment.querySelector(
+            [
+                'a#author-text[href]',
+                '#author-text a[href]',
+                'a[href^="/@"]',
+                'a[href^="/channel/"]',
+                'a[href^="/user/"]',
+                'a[href^="/c/"]'
+            ].join(',')
+        );
+    }
+
+    function getCommentAuthorName(
+        comment,
+        authorLink
+    ) {
+
+        const node =
+            comment.querySelector(
+                '#author-text span'
+            ) ||
+            comment.querySelector(
+                '#author-text'
+            ) ||
+            authorLink;
+
+        return (
+            node?.textContent?.trim() ||
+            '名前不明'
+        );
+    }
 
     function getCommentText(
         comment
     ) {
 
-        if (!comment) {
-            return '';
-        }
-
         const node =
             comment.querySelector(
-                CONTENT_SELECTOR
+                COMMENT_CONTENT_SELECTOR
             );
 
         if (node) {
@@ -836,42 +815,22 @@
             );
         }
 
-
-        /*
-         * YouTube側の描画変更で
-         * #content-textが存在しない場合の保険
-         */
-
         const fallback =
             comment.querySelector(
                 '#content'
             );
 
-        if (fallback) {
-
-            return (
-                fallback.innerText ||
-                fallback.textContent ||
-                ''
-            );
-        }
-
-        return '';
+        return (
+            fallback?.innerText ||
+            fallback?.textContent ||
+            ''
+        );
     }
-
-
-    /* =========================================================
-       コメント非表示
-    ========================================================= */
 
     function hideComment(
         comment,
         reason = ''
     ) {
-
-        if (!comment) {
-            return;
-        }
 
         comment.style.setProperty(
             'display',
@@ -882,6 +841,9 @@
         comment.dataset.youtubeNgHidden =
             '1';
 
+        comment.dataset.youtubeNgKind =
+            'comment';
+
         if (reason) {
 
             comment.dataset.youtubeNgReason =
@@ -889,30 +851,46 @@
         }
     }
 
+    function restoreHiddenComments() {
 
-    /* =========================================================
-       コメント判定
-    ========================================================= */
+        document
+            .querySelectorAll(
+                '[data-youtube-ng-kind="comment"]'
+            )
+            .forEach(
+                comment => {
+
+                    comment.style.removeProperty(
+                        'display'
+                    );
+
+                    delete comment.dataset
+                        .youtubeNgHidden;
+
+                    delete comment.dataset
+                        .youtubeNgKind;
+
+                    delete comment.dataset
+                        .youtubeNgReason;
+                }
+            );
+    }
 
     function filterComment(
         comment
     ) {
 
-        if (!comment) {
-            return;
-        }
-
-
-        /* ---------- NGユーザー ---------- */
-
         const authorLink =
-            getAuthorLink(
+            getCommentAuthorLink(
                 comment
             );
 
         const channelUrl =
-            getChannelUrl(
-                authorLink
+            normalizeChannelUrl(
+                authorLink?.href ||
+                authorLink?.getAttribute(
+                    'href'
+                )
             );
 
         if (
@@ -930,87 +908,512 @@
             return;
         }
 
-
-        /* ---------- NGワード ---------- */
-
         const text =
             getCommentText(
                 comment
             );
 
-        /*
-         * 本文がまだ描画されていない場合は何もしません。
-         *
-         * MutationObserverによる再スキャンで、
-         * 本文描画後にもう一度判定します。
-         */
-
         if (!text) {
             return;
         }
 
-        const matchedWord =
-            getMatchedNGWord(
-                text
+        const matched =
+            getMatchedWord(
+                text,
+                loadCommentNGWords()
             );
 
-        if (matchedWord) {
+        if (matched) {
 
             hideComment(
                 comment,
-                `NGワード：${matchedWord}`
+                `コメントNGワード：${matched}`
             );
         }
     }
 
-
-    function filterAllComments(
-        root = document
-    ) {
-
-        getComments(root)
-            .forEach(
-                filterComment
-            );
-    }
-
-
-    /* =========================================================
-       コメント横の投稿者NGボタン
-    ========================================================= */
-
-    function createUserNGButton(
+    function createCommentNGButton(
         comment
     ) {
 
-        if (!comment) {
-            return;
-        }
-
         if (
             comment.querySelector(
-                `.${USER_NG_BUTTON_CLASS}`
+                `.${COMMENT_USER_BUTTON_CLASS}`
             )
         ) {
             return;
         }
 
         const authorLink =
-            getAuthorLink(
+            getCommentAuthorLink(
                 comment
             );
 
+        if (!authorLink) {
+            return;
+        }
+
         const channelUrl =
-            getChannelUrl(
+            normalizeChannelUrl(
+                authorLink.href ||
+                authorLink.getAttribute(
+                    'href'
+                )
+            );
+
+        if (!channelUrl) {
+            return;
+        }
+
+        const authorName =
+            getCommentAuthorName(
+                comment,
                 authorLink
             );
 
+        const button =
+            makeTinyNGButton(
+                'この投稿者をNG登録（コメント・動画・Shortsすべて非表示）',
+                event => {
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (
+                        addBlockedUser(
+                            authorName,
+                            channelUrl
+                        )
+                    ) {
+
+                        hideComment(
+                            comment,
+                            'NGユーザー'
+                        );
+                    }
+                }
+            );
+
+        button.classList.add(
+            COMMENT_USER_BUTTON_CLASS
+        );
+
+        const authorContainer =
+            comment.querySelector(
+                '#header-author'
+            ) ||
+            comment.querySelector(
+                '#author-text'
+            )?.parentElement ||
+            authorLink.parentElement;
+
+        authorContainer?.appendChild(
+            button
+        );
+    }
+
+    /* =========================================================
+       動画 / Shorts 処理
+    ========================================================= */
+
+    function getVideoCards(
+        root = document
+    ) {
+
+        const result =
+            new Set();
+
         if (
-            !authorLink ||
-            !channelUrl
+            root instanceof Element &&
+            root.matches(
+                VIDEO_CARD_SELECTOR
+            )
+        ) {
+
+            result.add(root);
+        }
+
+        if (
+            root.querySelectorAll
+        ) {
+
+            root
+                .querySelectorAll(
+                    VIDEO_CARD_SELECTOR
+                )
+                .forEach(
+                    card => {
+
+                        /*
+                         * rich-item内のlockupを
+                         * 二重処理しない
+                         */
+                        if (
+                            card.matches(
+                                'yt-lockup-view-model'
+                            ) &&
+                            card.closest(
+                                'ytd-rich-item-renderer'
+                            )
+                        ) {
+                            return;
+                        }
+
+                        result.add(
+                            card
+                        );
+                    }
+                );
+        }
+
+        return [
+            ...result
+        ];
+    }
+
+    function getVideoTitle(
+        card
+    ) {
+
+        /*
+         * Shorts専用タイトル
+         */
+        const shortsTitle =
+            card.querySelector(
+                '.shortsLockupViewModelHostMetadataTitle'
+            );
+
+        if (shortsTitle) {
+
+            return (
+                shortsTitle.getAttribute(
+                    'title'
+                ) ||
+                shortsTitle.innerText ||
+                shortsTitle.textContent ||
+                ''
+            ).trim();
+        }
+
+        const candidates =
+            card.querySelectorAll(
+                VIDEO_TITLE_SELECTOR
+            );
+
+        for (
+            const node
+            of candidates
+        ) {
+
+            const text =
+                node.getAttribute?.(
+                    'title'
+                ) ||
+                node.innerText ||
+                node.textContent ||
+                '';
+
+            const cleaned =
+                text.trim();
+
+            if (cleaned) {
+
+                return cleaned;
+            }
+        }
+
+        return '';
+    }
+
+    function getVideoChannelLink(
+        card
+    ) {
+
+        const links =
+            card.querySelectorAll(
+                CHANNEL_LINK_SELECTOR
+            );
+
+        for (
+            const link
+            of links
+        ) {
+
+            const url =
+                normalizeChannelUrl(
+                    link.href ||
+                    link.getAttribute(
+                        'href'
+                    )
+                );
+
+            if (url) {
+
+                return link;
+            }
+        }
+
+        return null;
+    }
+
+    function getVideoChannelName(
+        card,
+        channelLink
+    ) {
+
+        const direct =
+            card.querySelector(
+                'ytd-channel-name #text'
+            ) ||
+            card.querySelector(
+                '#channel-name #text'
+            ) ||
+            card.querySelector(
+                'ytd-channel-name'
+            ) ||
+            card.querySelector(
+                '#channel-name'
+            );
+
+        const text =
+            direct?.textContent?.trim() ||
+            channelLink
+                ?.textContent
+                ?.trim() ||
+            channelLink
+                ?.getAttribute?.(
+                    'aria-label'
+                )
+                ?.trim() ||
+            '';
+
+        return (
+            text ||
+            '名前不明'
+        );
+    }
+
+    function hideVideoCard(
+        card,
+        reason = ''
+    ) {
+
+        card.style.setProperty(
+            'display',
+            'none',
+            'important'
+        );
+
+        card.dataset.youtubeNgHidden =
+            '1';
+
+        card.dataset.youtubeNgKind =
+            'video';
+
+        if (reason) {
+
+            card.dataset.youtubeNgReason =
+                reason;
+        }
+    }
+
+    function restoreHiddenVideos() {
+
+        document
+            .querySelectorAll(
+                '[data-youtube-ng-kind="video"]'
+            )
+            .forEach(
+                card => {
+
+                    card.style.removeProperty(
+                        'display'
+                    );
+
+                    delete card.dataset
+                        .youtubeNgHidden;
+
+                    delete card.dataset
+                        .youtubeNgKind;
+
+                    delete card.dataset
+                        .youtubeNgReason;
+                }
+            );
+    }
+
+    function filterVideoCard(
+        card
+    ) {
+
+        /*
+         * 広告枠は触らない
+         */
+        if (
+            card.matches(
+                'ytd-ad-slot-renderer'
+            ) ||
+            card.querySelector(
+                'ytd-ad-slot-renderer, .ad-created'
+            )
         ) {
             return;
         }
+
+        const channelLink =
+            getVideoChannelLink(
+                card
+            );
+
+        const channelUrl =
+            normalizeChannelUrl(
+                channelLink?.href ||
+                channelLink?.getAttribute(
+                    'href'
+                )
+            );
+
+        if (
+            channelUrl &&
+            isBlockedUser(
+                channelUrl
+            )
+        ) {
+
+            hideVideoCard(
+                card,
+                'NGユーザー'
+            );
+
+            return;
+        }
+
+        const title =
+            getVideoTitle(
+                card
+            );
+
+        if (!title) {
+            return;
+        }
+
+        const matched =
+            getMatchedWord(
+                title,
+                loadVideoTitleNGWords()
+            );
+
+        if (matched) {
+
+            hideVideoCard(
+                card,
+                `動画タイトルNG：${matched}`
+            );
+        }
+    }
+
+    function createVideoNGButton(
+        card
+    ) {
+
+        if (
+            card.querySelector(
+                `.${VIDEO_USER_BUTTON_CLASS}`
+            )
+        ) {
+            return;
+        }
+
+        if (
+            card.dataset.youtubeNgHidden ===
+            '1'
+        ) {
+            return;
+        }
+
+        const channelLink =
+            getVideoChannelLink(
+                card
+            );
+
+        if (!channelLink) {
+            return;
+        }
+
+        const channelUrl =
+            normalizeChannelUrl(
+                channelLink.href ||
+                channelLink.getAttribute(
+                    'href'
+                )
+            );
+
+        if (!channelUrl) {
+            return;
+        }
+
+        const channelName =
+            getVideoChannelName(
+                card,
+                channelLink
+            );
+
+        const button =
+            makeTinyNGButton(
+                'この投稿者をNG登録（通常動画・Shorts・コメントを非表示）',
+                event => {
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (
+                        addBlockedUser(
+                            channelName,
+                            channelUrl
+                        )
+                    ) {
+
+                        hideVideoCard(
+                            card,
+                            'NGユーザー'
+                        );
+                    }
+                }
+            );
+
+        button.classList.add(
+            VIDEO_USER_BUTTON_CLASS
+        );
+
+        /*
+         * なるべくチャンネル名付近に置く
+         */
+        const target =
+            card.querySelector(
+                'ytd-channel-name'
+            ) ||
+            card.querySelector(
+                '#channel-name'
+            ) ||
+            channelLink.parentElement ||
+            card.querySelector(
+                '#metadata'
+            ) ||
+            card;
+
+        target.appendChild(
+            button
+        );
+    }
+
+    /* =========================================================
+       小さいNGボタン
+    ========================================================= */
+
+    function makeTinyNGButton(
+        title,
+        onClick
+    ) {
 
         const button =
             document.createElement(
@@ -1020,14 +1423,11 @@
         button.type =
             'button';
 
-        button.className =
-            USER_NG_BUTTON_CLASS;
-
         button.textContent =
             'NG';
 
         button.title =
-            'この投稿者をNGユーザーに登録';
+            title;
 
         Object.assign(
             button.style,
@@ -1063,7 +1463,13 @@
                     'pointer',
 
                 verticalAlign:
-                    'middle'
+                    'middle',
+
+                position:
+                    'relative',
+
+                zIndex:
+                    '50'
             }
         );
 
@@ -1078,7 +1484,7 @@
                     '#cc0000';
 
                 button.style.color =
-                    '#ffffff';
+                    '#fff';
             }
         );
 
@@ -1099,57 +1505,43 @@
 
         button.addEventListener(
             'click',
-            event => {
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                blockUser(
-                    comment
-                );
-            }
+            onClick
         );
 
-        const authorContainer =
-            comment.querySelector(
-                '#header-author'
-            ) ||
-            comment.querySelector(
-                '#author-text'
-            )?.parentElement ||
-            authorLink.parentElement;
-
-        if (!authorContainer) {
-            return;
-        }
-
-        if (
-            authorContainer.querySelector(
-                `.${USER_NG_BUTTON_CLASS}`
-            )
-        ) {
-            return;
-        }
-
-        authorContainer.appendChild(
-            button
-        );
+        return button;
     }
-
-
-    function addUserNGButtons(
-        root = document
-    ) {
-
-        getComments(root)
-            .forEach(
-                createUserNGButton
-            );
-    }
-
 
     /* =========================================================
-       右下NG設定メニュー
+       全画面表示中は右下NGメニューを隠す
+    ========================================================= */
+
+    function isFullscreen() {
+
+        return Boolean(
+            document.fullscreenElement ||
+            document.webkitFullscreenElement
+        );
+    }
+
+    function updateControlsVisibility() {
+
+        const controls =
+            document.getElementById(
+                CONTROL_ID
+            );
+
+        if (!controls) {
+            return;
+        }
+
+        controls.style.display =
+            isFullscreen()
+                ? 'none'
+                : 'flex';
+    }
+
+    /* =========================================================
+       右下NG設定
     ========================================================= */
 
     function createControls() {
@@ -1157,12 +1549,9 @@
         if (
             document.getElementById(
                 CONTROL_ID
-            )
+            ) ||
+            !document.body
         ) {
-            return;
-        }
-
-        if (!document.body) {
             return;
         }
 
@@ -1206,9 +1595,6 @@
             }
         );
 
-
-        /* ---------- 展開メニュー ---------- */
-
         const menu =
             document.createElement(
                 'div'
@@ -1227,7 +1613,7 @@
                     '4px',
 
                 padding:
-                    '5px',
+                    '6px',
 
                 background:
                     'rgba(32,32,32,0.96)',
@@ -1242,7 +1628,6 @@
                     '0 2px 8px rgba(0,0,0,0.4)'
             }
         );
-
 
         function makeMenuButton(
             text,
@@ -1268,10 +1653,10 @@
                 button.style,
                 {
                     minWidth:
-                        '100px',
+                        '150px',
 
                     padding:
-                        '5px 7px',
+                        '6px 8px',
 
                     border:
                         '1px solid #666',
@@ -1295,7 +1680,10 @@
                         'pointer',
 
                     whiteSpace:
-                        'nowrap'
+                        'nowrap',
+
+                    textAlign:
+                        'left'
                 }
             );
 
@@ -1325,33 +1713,45 @@
             return button;
         }
 
-
         menu.appendChild(
             makeMenuButton(
-                '＋ NGワード',
-                'NGワードを追加',
-                addNGWord
+                '＋ コメントNGワード',
+                'コメント本文のNGワードを追加',
+                addCommentNGWord
             )
         );
 
         menu.appendChild(
             makeMenuButton(
-                'ワード一覧',
-                'NGワードの確認・削除',
-                manageNGWords
+                'コメントNG一覧',
+                'コメントNGワードの確認・削除',
+                manageCommentNGWords
             )
         );
 
         menu.appendChild(
             makeMenuButton(
-                'ユーザー一覧',
-                'NGユーザーの確認・解除',
+                '＋ 動画タイトルNG',
+                '動画・ShortsのタイトルNGワードを追加',
+                addVideoTitleNGWord
+            )
+        );
+
+        menu.appendChild(
+            makeMenuButton(
+                '動画タイトルNG一覧',
+                '動画タイトルNGワードの確認・削除',
+                manageVideoTitleNGWords
+            )
+        );
+
+        menu.appendChild(
+            makeMenuButton(
+                'NG投稿者一覧',
+                'コメント・動画共通のNG投稿者を確認・解除',
                 manageNGUsers
             )
         );
-
-
-        /* ---------- 開閉ボタン ---------- */
 
         const toggle =
             document.createElement(
@@ -1438,40 +1838,87 @@
         document.body.appendChild(
             container
         );
-    }
 
+        updateControlsVisibility();
+    }
 
     /* =========================================================
        全体スキャン
     ========================================================= */
 
+    function scanComments(
+        root = document
+    ) {
+
+        getComments(root)
+            .forEach(
+                comment => {
+
+                    filterComment(
+                        comment
+                    );
+
+                    if (
+                        comment.dataset
+                            .youtubeNgHidden !==
+                        '1'
+                    ) {
+
+                        createCommentNGButton(
+                            comment
+                        );
+                    }
+                }
+            );
+    }
+
+    function scanVideos(
+        root = document
+    ) {
+
+        getVideoCards(root)
+            .forEach(
+                card => {
+
+                    filterVideoCard(
+                        card
+                    );
+
+                    if (
+                        card.dataset
+                            .youtubeNgHidden !==
+                        '1'
+                    ) {
+
+                        createVideoNGButton(
+                            card
+                        );
+                    }
+                }
+            );
+    }
+
     function fullScan() {
 
-        filterAllComments(
+        scanComments(
             document
         );
 
-        addUserNGButtons(
+        scanVideos(
             document
         );
 
         createControls();
+
+        updateControlsVisibility();
     }
 
-
     /* =========================================================
-       MutationObserver
-
-       YouTubeではコメントの枠が表示された後に、
-       コメント本文などが遅れて描画される場合があります。
-
-       DOMが変更されたら少し待ってから、
-       現在表示されているコメント全体を再チェックします。
+       MutationObserver / SPA遷移
     ========================================================= */
 
     let mutationTimer =
         null;
-
 
     function scheduleFullScan(
         delay = 180
@@ -1488,11 +1935,6 @@
             );
     }
 
-
-    /* =========================================================
-       起動
-    ========================================================= */
-
     function start() {
 
         if (!document.body) {
@@ -1505,9 +1947,7 @@
             return;
         }
 
-
         fullScan();
-
 
         const observer =
             new MutationObserver(
@@ -1518,7 +1958,6 @@
                     );
                 }
             );
-
 
         observer.observe(
             document.body,
@@ -1534,11 +1973,10 @@
             }
         );
 
-
-        /* =====================================================
-           YouTube内で別動画へ移動したとき
-        ===================================================== */
-
+        /*
+         * YouTube内で
+         * 別動画・別ページへ移動したとき
+         */
         document.addEventListener(
             'yt-navigate-finish',
             () => {
@@ -1564,11 +2002,26 @@
             }
         );
 
+        /*
+         * 全画面になった瞬間に
+         * 右下NGメニューを消す
+         */
+        document.addEventListener(
+            'fullscreenchange',
+            updateControlsVisibility
+        );
 
-        /* =====================================================
-           遅延読み込み対策
-        ===================================================== */
+        /*
+         * Safari系などの保険
+         */
+        document.addEventListener(
+            'webkitfullscreenchange',
+            updateControlsVisibility
+        );
 
+        /*
+         * 遅延読み込み対策
+         */
         setTimeout(
             fullScan,
             1000
@@ -1584,7 +2037,6 @@
             5000
         );
     }
-
 
     start();
 
