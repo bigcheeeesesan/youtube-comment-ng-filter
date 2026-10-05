@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.2
+// @version      4.0.3
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -22,6 +22,7 @@
 
     const COMMENT_USER_BUTTON_CLASS = 'youtube-user-ng-button';
     const VIDEO_USER_BUTTON_CLASS = 'youtube-video-user-ng-button';
+    const WATCH_USER_BUTTON_CLASS = 'youtube-watch-user-ng-button';
     const CONTROL_ID = 'youtube-ng-unified-controls';
 
     /* =========================================================
@@ -1386,6 +1387,78 @@
         );
     }
 
+    function getWatchUploader() {
+        if (location.pathname !== '/watch') return null;
+        const videoId = new URL(location.href).searchParams.get('v');
+        if (!videoId) return null;
+        const page = document.querySelector('ytd-watch-flexy');
+        if (!page || page.hidden) return null;
+        const renderedId = page.getAttribute('video-id');
+        if (renderedId && renderedId !== videoId) return null;
+
+        // 再生動画の投稿者欄だけを見る。関連動画やコメントは対象外。
+        const owner = page.querySelector(
+            '#above-the-fold #owner ytd-video-owner-renderer'
+        ) || page.querySelector('#owner ytd-video-owner-renderer');
+        if (!owner) return null;
+        const link = getVideoChannelLink(owner);
+        const channelUrl = normalizeChannelUrl(
+            link?.href || link?.getAttribute('href')
+        );
+        if (!channelUrl) return null;
+        return {
+            owner,
+            channelUrl,
+            name: link.textContent?.trim() || getVideoChannelName(owner, link),
+            target: owner.querySelector('#channel-name') || owner,
+            videoId
+        };
+    }
+
+    function createWatchNGButton() {
+        const uploader = getWatchUploader();
+        document.querySelectorAll(`.${WATCH_USER_BUTTON_CLASS}`).forEach(button => {
+            if (!uploader || !uploader.owner.contains(button) ||
+                button.dataset.channelUrl !== uploader.channelUrl ||
+                button.dataset.videoId !== uploader.videoId) {
+                button.remove();
+            }
+        });
+        if (!uploader) return;
+
+        let button = uploader.owner.querySelector(`.${WATCH_USER_BUTTON_CLASS}`);
+        if (!button) {
+            button = makeTinyNGButton(
+                'この動画の投稿者をNG登録（動画・Shorts・コメントを非表示）',
+                event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    // クリック時にも確認し、SPA遷移前の投稿者を登録しない。
+                    const current = getWatchUploader();
+                    if (!current || current.owner !== uploader.owner ||
+                        current.videoId !== uploader.videoId ||
+                        current.channelUrl !== uploader.channelUrl) {
+                        createWatchNGButton();
+                        return;
+                    }
+                    addBlockedUser(current.name, current.channelUrl);
+                }
+            );
+            button.classList.add(WATCH_USER_BUTTON_CLASS);
+            button.dataset.channelUrl = uploader.channelUrl;
+            button.dataset.videoId = uploader.videoId;
+            uploader.target.appendChild(button);
+        }
+        const blocked = isBlockedUser(uploader.channelUrl);
+        const label = blocked ? 'NG登録済み' : '投稿者をNG';
+        const title = blocked
+            ? '登録済みです。右下のNG設定 → NG投稿者一覧から解除できます。'
+            : 'この動画の投稿者をNG登録（動画・Shorts・コメントを非表示）';
+        if (button.textContent !== label) button.textContent = label;
+        if (button.title !== title) button.title = title;
+        button.disabled = blocked;
+    }
+
     /* =========================================================
        小さいNGボタン
     ========================================================= */
@@ -1925,6 +1998,8 @@
         );
 
         createControls();
+
+        createWatchNGButton();
 
         updateControlsVisibility();
     }
