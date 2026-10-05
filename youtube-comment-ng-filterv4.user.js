@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.6
+// @version      4.0.7
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -1566,12 +1566,13 @@
             addBlockedUser(handle, 'https://www.youtube.com/' + handle);
         });
         button.id = id;
-        button.textContent = 'このShortsの投稿者をNG';
+        button.textContent = '投稿者NG';
         Object.assign(button.style, {
             position: 'fixed', left: '20px', bottom: '145px',
-            zIndex: '2147483647', padding: '8px 12px',
-            background: '#303030', color: '#fff', fontSize: '13px',
-            lineHeight: '20px', borderRadius: '8px', marginLeft: '0'
+            zIndex: '2147483647', padding: '4px 8px',
+            background: '#303030', color: '#fff', fontSize: '11px',
+            lineHeight: '16px', borderRadius: '12px', marginLeft: '0',
+            minWidth: '0', opacity: '0.88'
         });
         document.body.appendChild(button);
     }
@@ -2251,3 +2252,4 @@
     start();
 
 })();
+
