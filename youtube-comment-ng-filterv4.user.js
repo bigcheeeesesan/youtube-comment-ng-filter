@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.4
+// @version      4.0.5
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -1422,15 +1422,33 @@
         const videoId = location.pathname.split('/')[2];
         if (!videoId) return null;
         // Shortsは前後の動画もDOMに残るため、再生中のカードだけを見る。
-        const reel = document.querySelector(
-            'ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]'
+        const visible = element => {
+            if (!element || element.hidden) return false;
+            const r = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return style.visibility !== 'hidden' && style.display !== 'none' &&
+                r.width > 0 && r.height > 0 && r.bottom > 0 &&
+                r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+        };
+        const reels = [...document.querySelectorAll('ytd-reel-video-renderer')];
+        const candidates = reels.filter(reel => {
+            const id = reel.getAttribute('video-id');
+            return visible(reel) && (!id || id === videoId);
+        });
+        const active = candidates.filter(reel =>
+            reel.hasAttribute('is-active') || reel.hasAttribute('active') ||
+            reel.getAttribute('video-id') === videoId
         );
-        if (!reel || reel.hidden) return null;
-        const renderedId = reel.getAttribute('video-id');
-        if (renderedId && renderedId !== videoId) return null;
+        const pool = active.length ? active : candidates;
+        // 複数の投稿者が画面内にあるときは自動登録を見送る。
+        const reel = pool.length === 1 ? pool[0] :
+            (reels.length === 0 ? document.querySelector('ytd-shorts') : null);
+        if (!reel || !visible(reel)) return null;
         // タイトル内のメンションやコメント欄のリンクは投稿者として扱わない。
         const owner = reel.querySelector('yt-reel-channel-bar-view-model') ||
             reel.querySelector('.ytReelChannelBarViewModelHost') ||
+            reel.querySelector('yt-shorts-video-metadata-view-model') ||
+            reel.querySelector('.ytShortsVideoMetadataViewModelHost') ||
             reel.querySelector('ytd-reel-player-overlay-renderer #channel-info') ||
             reel.querySelector('#channel-info') ||
             reel.querySelector('ytd-channel-name');
@@ -1439,7 +1457,7 @@
         const channelUrl = normalizeChannelUrl(
             link?.href || link?.getAttribute('href')
         );
-        if (!channelUrl) return null;
+        if (!channelUrl || !visible(link)) return null;
         return {
             owner,
             channelUrl,
@@ -1450,6 +1468,12 @@
     }
 
     function createWatchNGButton() {
+        createShortsNGButton();
+        if (location.pathname.startsWith('/shorts/')) {
+            document.querySelectorAll(`.${WATCH_USER_BUTTON_CLASS}`)
+                .forEach(button => button.remove());
+            return;
+        }
         const uploader = getWatchUploader();
         document.querySelectorAll(`.${WATCH_USER_BUTTON_CLASS}`).forEach(button => {
             if (!uploader || !uploader.owner.contains(button) ||
@@ -1491,6 +1515,48 @@
         if (button.textContent !== label) button.textContent = label;
         if (button.title !== title) button.title = title;
         button.disabled = blocked;
+    }
+
+    function createShortsNGButton() {
+        const id = 'youtube-shorts-uploader-ng';
+        let button = document.getElementById(id);
+        if (!location.pathname.startsWith('/shorts/')) {
+            button?.remove();
+            return;
+        }
+        if (button) return;
+        button = makeTinyNGButton('現在のShortsの投稿者をNG登録', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!location.pathname.startsWith('/shorts/')) return;
+            const current = getShortsUploader();
+            if (current) {
+                addBlockedUser(current.name, current.channelUrl);
+                return;
+            }
+            // YouTubeの表示構造が違う場合にも、この画面から登録できる。
+            const value = prompt(
+                '投稿者を自動取得できませんでした。\n' +
+                '画面の投稿者名（@から始まる名前）を入力してください。\n' +
+                '例：@aikouka-hannou'
+            );
+            if (value === null) return;
+            const handle = value.trim();
+            if (!/^@[^\s/?#]+$/.test(handle)) {
+                alert('画面に表示されている@から始まる投稿者名を入力してください。');
+                return;
+            }
+            addBlockedUser(handle, 'https://www.youtube.com/' + handle);
+        });
+        button.id = id;
+        button.textContent = 'このShortsの投稿者をNG';
+        Object.assign(button.style, {
+            position: 'fixed', left: '20px', bottom: '145px',
+            zIndex: '2147483647', padding: '8px 12px',
+            background: '#303030', color: '#fff', fontSize: '13px',
+            lineHeight: '20px', borderRadius: '8px', marginLeft: '0'
+        });
+        document.body.appendChild(button);
     }
 
     /* =========================================================
