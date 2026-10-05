@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.3
+// @version      4.0.4
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -1388,6 +1388,9 @@
     }
 
     function getWatchUploader() {
+        if (location.pathname.startsWith('/shorts/')) {
+            return getShortsUploader();
+        }
         if (location.pathname !== '/watch') return null;
         const videoId = new URL(location.href).searchParams.get('v');
         if (!videoId) return null;
@@ -1411,6 +1414,37 @@
             channelUrl,
             name: link.textContent?.trim() || getVideoChannelName(owner, link),
             target: owner.querySelector('#channel-name') || owner,
+            videoId
+        };
+    }
+
+    function getShortsUploader() {
+        const videoId = location.pathname.split('/')[2];
+        if (!videoId) return null;
+        // Shortsは前後の動画もDOMに残るため、再生中のカードだけを見る。
+        const reel = document.querySelector(
+            'ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]'
+        );
+        if (!reel || reel.hidden) return null;
+        const renderedId = reel.getAttribute('video-id');
+        if (renderedId && renderedId !== videoId) return null;
+        // タイトル内のメンションやコメント欄のリンクは投稿者として扱わない。
+        const owner = reel.querySelector('yt-reel-channel-bar-view-model') ||
+            reel.querySelector('.ytReelChannelBarViewModelHost') ||
+            reel.querySelector('ytd-reel-player-overlay-renderer #channel-info') ||
+            reel.querySelector('#channel-info') ||
+            reel.querySelector('ytd-channel-name');
+        if (!owner) return null;
+        const link = getVideoChannelLink(owner);
+        const channelUrl = normalizeChannelUrl(
+            link?.href || link?.getAttribute('href')
+        );
+        if (!channelUrl) return null;
+        return {
+            owner,
+            channelUrl,
+            name: link.textContent?.trim() || getVideoChannelName(owner, link),
+            target: owner,
             videoId
         };
     }
@@ -2060,7 +2094,10 @@
                     true,
 
                 characterData:
-                    true
+                    true,
+
+                attributes: true,
+                attributeFilter: ['is-active', 'active', 'video-id', 'href']
             }
         );
 
