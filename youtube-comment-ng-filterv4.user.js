@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube NGフィルター（コメント＋動画＋Shorts）
 // @namespace    youtube-ng-all-in-one
-// @version      4.0.7
+// @version      4.0.8
 // @description  NGワード・NG投稿者のコメント、NG投稿者の動画/Shorts、NGタイトルの動画/Shortsを自動で非表示にします
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -22,6 +22,7 @@
 
     const COMMENT_USER_BUTTON_CLASS = 'youtube-user-ng-button';
     const VIDEO_USER_BUTTON_CLASS = 'youtube-video-user-ng-button';
+    const SHORTS_USER_BUTTON_CLASS = 'youtube-shorts-user-ng-button';
     const WATCH_USER_BUTTON_CLASS = 'youtube-watch-user-ng-button';
     const CONTROL_ID = 'youtube-ng-unified-controls';
 
@@ -1532,49 +1533,92 @@
 
     function createShortsNGButton() {
         const id = 'youtube-shorts-uploader-ng';
-        let button = document.getElementById(id);
         const shortsView = location.pathname.startsWith('/shorts/') ||
             Boolean(document.querySelector('ytd-shorts, ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]'));
+        let button = document.getElementById(id);
         if (!shortsView) {
             button?.remove();
             return;
         }
-        if (button) return;
-        button = makeTinyNGButton('現在のShortsの投稿者をNG登録', event => {
+
+        // 画面左下に表示される @ユーザー名のリンクのすぐ横に配置する。
+        const visible = element => {
+            if (!element || element.hidden) return false;
+            const r = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return style.visibility !== 'hidden' && style.display !== 'none' &&
+                r.width > 0 && r.height > 0 && r.bottom > 0 &&
+                r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+        };
+        const anchors = [...document.querySelectorAll('a[href^="/@"]')]
+            .filter(a => {
+                const r = a.getBoundingClientRect();
+                return visible(a) && r.top > innerHeight * 0.3 &&
+                    r.left < innerWidth * 0.7 &&
+                    /^@[^\s/?#]+$/.test(a.textContent.trim()) &&
+                    !a.closest('ytd-comment-view-model, ytd-comment-renderer');
+            });
+        const unique = [...new Map(anchors.map(a => [
+            normalizeChannelUrl(a.href || a.getAttribute('href')), a
+        ])).values()];
+        const anchor = unique.length === 1 ? unique[0] : null;
+        if (!anchor) {
+            button?.remove();
+            return;
+        }
+        const channelUrl = normalizeChannelUrl(anchor.href || anchor.getAttribute('href'));
+        const videoId = location.pathname.startsWith('/shorts/')
+            ? location.pathname.split('/')[2]
+            : new URL(location.href).searchParams.get('v');
+        const name = anchor.textContent.trim();
+
+        if (!button) {
+            button = makeTinyNGButton('このShortsの投稿者をNG登録', event => {
             event.preventDefault();
             event.stopPropagation();
-            const stillShorts = location.pathname.startsWith('/shorts/') ||
-                Boolean(document.querySelector('ytd-shorts, ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]'));
-            if (!stillShorts) return;
-            const current = getShortsUploader();
-            if (current) {
-                addBlockedUser(current.name, current.channelUrl);
-                return;
-            }
-            // YouTubeの表示構造が違う場合にも、この画面から登録できる。
-            const value = prompt(
-                '投稿者を自動取得できませんでした。\n' +
-                '画面の投稿者名（@から始まる名前）を入力してください。\n' +
-                '例：@aikouka-hannou'
-            );
-            if (value === null) return;
-            const handle = value.trim();
-            if (!/^@[^\s/?#]+$/.test(handle)) {
-                alert('画面に表示されている@から始まる投稿者名を入力してください。');
-                return;
-            }
-            addBlockedUser(handle, 'https://www.youtube.com/' + handle);
-        });
-        button.id = id;
-        button.textContent = '投稿者NG';
-        Object.assign(button.style, {
-            position: 'fixed', left: '20px', bottom: '145px',
-            zIndex: '2147483647', padding: '4px 8px',
-            background: '#303030', color: '#fff', fontSize: '11px',
-            lineHeight: '16px', borderRadius: '12px', marginLeft: '0',
-            minWidth: '0', opacity: '0.88'
-        });
-        document.body.appendChild(button);
+                const stillShorts = location.pathname.startsWith('/shorts/') ||
+                    Boolean(document.querySelector('ytd-shorts, ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active]'));
+                if (!stillShorts) return;
+                const currentAnchor = [...document.querySelectorAll('a[href^="/@"]')]
+                    .find(a => visible(a) &&
+                        normalizeChannelUrl(a.href || a.getAttribute('href')) === button.dataset.channelUrl &&
+                        a.textContent.trim() === button.dataset.channelName);
+                if (!currentAnchor) {
+                    button.remove();
+                    return;
+                }
+                const currentUrl = normalizeChannelUrl(currentAnchor.href || currentAnchor.getAttribute('href'));
+                const currentVideo = location.pathname.startsWith('/shorts/')
+                    ? location.pathname.split('/')[2]
+                    : new URL(location.href).searchParams.get('v');
+                if (currentUrl !== button.dataset.channelUrl ||
+                    currentVideo !== button.dataset.videoId) {
+                    createShortsNGButton();
+                    return;
+                }
+                addBlockedUser(currentAnchor.textContent.trim(), currentUrl);
+            });
+            button.id = id;
+            button.classList.add(SHORTS_USER_BUTTON_CLASS);
+            button.textContent = 'NG';
+            Object.assign(button.style, {
+                padding: '0 5px', fontSize: '10px', lineHeight: '16px',
+                marginLeft: '5px', minWidth: '0'
+            });
+        }
+        button.dataset.channelUrl = channelUrl;
+        button.dataset.channelName = name;
+        button.dataset.videoId = videoId || '';
+        if (button.parentElement !== anchor.parentElement) {
+            button.remove();
+            anchor.insertAdjacentElement('afterend', button);
+        } else if (button.previousElementSibling !== anchor) {
+            anchor.insertAdjacentElement('afterend', button);
+        }
+        button.disabled = isBlockedUser(channelUrl);
+        button.title = button.disabled
+            ? 'NG登録済み。右下のNG設定から解除できます。'
+            : 'このShortsの投稿者をNG登録';
     }
 
     /* =========================================================
@@ -2252,4 +2296,3 @@
     start();
 
 })();
-
